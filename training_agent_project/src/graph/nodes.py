@@ -24,7 +24,7 @@ from ..rag.knowledge_retriever import create_knowledge_retriever, KnowledgeRetri
 logger = logging.getLogger(__name__)
 
 
-def coordinator_node(state: TrainingAgentState, config: RunnableConfig) -> Command[Literal["task_analyzer", "planner"]]:
+def coordinator_node(state: TrainingAgentState, config: RunnableConfig) -> Command[Literal["dynamic_executor", "planner"]]:
     """
     协调器节点 - 接收任务ID并决定下一步操作
     """
@@ -68,12 +68,12 @@ def coordinator_node(state: TrainingAgentState, config: RunnableConfig) -> Comma
     
     # 决定是否已有足够上下文
     if state.get("training_task") and state.get("current_plan"):
-        return Command(goto="task_analyzer", update=update_data)
+        return Command(goto="dynamic_executor", update=update_data)
     else:
         return Command(goto="planner", update=update_data)
 
 
-def planner_node(state: TrainingAgentState, config: RunnableConfig) -> Command[Literal["task_analyzer", "__end__"]]:
+def planner_node(state: TrainingAgentState, config: RunnableConfig) -> Command[Literal["dynamic_executor", "__end__"]]:
     """
     规划器节点 - 生成训练任务研究计划
     """
@@ -140,7 +140,7 @@ def planner_node(state: TrainingAgentState, config: RunnableConfig) -> Command[L
         ]
     }
     
-    return Command(goto="task_analyzer", update=update_data)
+    return Command(goto="dynamic_executor", update=update_data)
 
 
 def task_analyzer_node(state: TrainingAgentState, config: RunnableConfig) -> Command[Literal["performance_analyzer", "log_analyzer", "reporter"]]:
