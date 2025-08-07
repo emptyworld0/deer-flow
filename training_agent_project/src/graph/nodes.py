@@ -19,6 +19,7 @@ from ..tools.cluster_tools import (
     diagnose_training_issues,
     compare_training_tasks
 )
+from ..rag.knowledge_retriever import create_knowledge_retriever, KnowledgeRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -401,9 +402,9 @@ def log_analyzer_node(state: TrainingAgentState, config: RunnableConfig) -> Comm
 
 def diagnostics_node(state: TrainingAgentState, config: RunnableConfig) -> Command[Literal["reporter"]]:
     """
-    诊断节点 - 进行问题诊断和优化建议
+    诊断节点 - 进行问题诊断和优化建议（集成RAG）
     """
-    logger.info("Diagnostics node is running")
+    logger.info("Diagnostics node is running with RAG integration")
     
     task_id = state.get("task_id", "")
     plan = state.get("current_plan")
@@ -424,17 +425,47 @@ def diagnostics_node(state: TrainingAgentState, config: RunnableConfig) -> Comma
     try:
         observations = state.get("observations", [])
         
+        # 初始化RAG检索器
+        try:
+            knowledge_retriever = create_knowledge_retriever("historical")  # 使用历史数据检索器
+        except Exception as e:
+            logger.warning(f"Failed to initialize RAG retriever: {e}, falling back to rule-based approach")
+            knowledge_retriever = None
+        
         # 执行诊断
         if diag_step:
             # 获取日志数据和指标数据进行诊断
             log_data = {"logs": state.get("error_logs", [])}
             metrics_data = [metric.dict() for metric in state.get("training_metrics", [])]
             
+            # 传统诊断
             diagnosis_result = diagnose_training_issues.invoke({
                 "task_id": task_id,
                 "log_data": log_data,
                 "metrics_data": metrics_data
             })
+            
+            # RAG增强诊断
+            rag_solutions = []
+            if knowledge_retriever and diagnosis_result.get("issues_found"):
+                for issue in diagnosis_result["issues_found"]:
+                    if isinstance(issue, dict) and "message" in issue:
+                        problem_desc = issue["message"]
+                    else:
+                        problem_desc = str(issue)
+                    
+                    try:
+                        solutions = await knowledge_retriever.retrieve_solutions(problem_desc, top_k=2)
+                        for solution in solutions:
+                            rag_solutions.extend(solution.solutions_applied)
+                    except Exception as e:
+                        logger.warning(f"RAG solution retrieval failed: {e}")
+            
+            # 合并诊断结果
+            if rag_solutions:
+                diagnosis_result["rag_solutions"] = list(set(rag_solutions))  # 去重
+                diagnosis_result["recommendations"].extend(rag_solutions)
+                observations.append(f"Enhanced diagnosis with {len(rag_solutions)} RAG-retrieved solutions")
             
             diag_step.execution_res = json.dumps(diagnosis_result, ensure_ascii=False)
             observations.append(f"Completed issue diagnosis for task {task_id}")
@@ -471,14 +502,69 @@ def diagnostics_node(state: TrainingAgentState, config: RunnableConfig) -> Comma
                 elif usage_ratio < 0.3:
                     recommendations.append(f"Low {resource.resource_type.value} usage ({usage_ratio:.1%}), resources may be underutilized")
             
+            # RAG增强优化建议
+            rag_tips = []
+            if knowledge_retriever:
+                try:
+                    # 构建上下文
+                    rag_context = {}
+                    if performance_data and "analysis" in performance_data:
+                        analysis = performance_data["analysis"]
+                        if "loss" in analysis:
+                            trend = analysis["loss"].get("trend")
+                            if trend == "increasing":
+                                rag_context["loss_trend"] = "diverging"
+                            elif analysis["loss"].get("improvement", 0) < 5:
+                                rag_context["loss_trend"] = "plateau"
+                    
+                    if resource_usage:
+                        gpu_resources = [r for r in resource_usage if r.resource_type.value == "gpu"]
+                        if gpu_resources:
+                            gpu_usage = gpu_resources[0].current_usage / gpu_resources[0].max_usage
+                            rag_context["resource_usage"] = {"gpu_usage": gpu_usage}
+                    
+                    rag_tips = await knowledge_retriever.retrieve_optimization_tips(rag_context, top_k=5)
+                    recommendations.extend(rag_tips)
+                    observations.append(f"Enhanced recommendations with {len(rag_tips)} RAG-retrieved tips")
+                    
+                except Exception as e:
+                    logger.warning(f"RAG optimization tips retrieval failed: {e}")
+            
+            # 检索相似任务的经验
+            similar_task_tips = []
+            if knowledge_retriever:
+                try:
+                    training_task = state.get("training_task")
+                    if training_task:
+                        query_task = {
+                            "model_name": training_task.model_name,
+                            "task_type": "classification",  # 默认，实际应该从任务信息中提取
+                            "dataset_name": training_task.dataset_name
+                        }
+                        
+                        similar_tasks = await knowledge_retriever.retrieve_similar_tasks(query_task, top_k=3)
+                        for task in similar_tasks:
+                            similar_task_tips.extend(task.optimization_tips)
+                        
+                        if similar_task_tips:
+                            recommendations.extend(similar_task_tips)
+                            observations.append(f"Added {len(similar_task_tips)} tips from {len(similar_tasks)} similar tasks")
+                            
+                except Exception as e:
+                    logger.warning(f"Similar task retrieval failed: {e}")
+            
+            # 去重优化建议
+            unique_recommendations = list(dict.fromkeys(recommendations))
+            
             opt_recommendations = {
                 "task_id": task_id,
-                "recommendations": recommendations,
+                "recommendations": unique_recommendations,
+                "rag_enhanced": len(rag_tips) > 0 or len(similar_task_tips) > 0,
                 "priority": "high" if len(state.get("error_logs", [])) > 0 else "medium"
             }
             
             opt_step.execution_res = json.dumps(opt_recommendations, ensure_ascii=False)
-            observations.append(f"Generated {len(recommendations)} optimization recommendations for task {task_id}")
+            observations.append(f"Generated {len(unique_recommendations)} optimization recommendations for task {task_id}")
         
         update_data = {
             "current_plan": plan,

@@ -11,6 +11,7 @@
 - 📝 **智能日志分析**: 自动分析训练、错误和系统日志，识别问题
 - 🔧 **问题诊断**: 基于AI的问题识别和根因分析
 - 💡 **优化建议**: 提供可执行的性能优化和问题解决建议
+- 🧠 **RAG增强**: 基于历史训练经验和知识库的智能检索增强生成
 
 ### 架构特点
 - 🏗️ **模块化设计**: 基于LangGraph的状态图工作流
@@ -18,6 +19,7 @@
 - 🌊 **流式处理**: 支持实时进度反馈和流式结果输出
 - ⚡ **异步执行**: 高性能异步处理，支持并发任务
 - 🛡️ **容错机制**: 完善的错误处理和恢复能力
+- 📚 **知识增强**: RAG系统支持历史经验检索和智能推荐
 
 ## 🏗️ 系统架构
 
@@ -137,6 +139,44 @@ curl "http://localhost:8000/api/research/report/train-20241201-001"
 ```
 
 ## 🔧 高级配置
+
+### RAG知识库配置
+
+系统支持多种RAG配置模式：
+
+```python
+# 配置RAG检索器类型
+RAG_RETRIEVER_TYPE=vector  # 或 historical
+RAG_EMBEDDINGS_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+# 向量数据库配置
+VECTOR_STORE_TYPE=faiss  # 或 chroma
+VECTOR_STORE_PATH=./knowledge_base
+
+# 历史数据配置
+HISTORICAL_DATA_SOURCE=database  # 或 filesystem
+HISTORICAL_DATA_PATH=./historical_data
+```
+
+### 知识库初始化
+
+```python
+from src.rag.knowledge_retriever import create_knowledge_retriever, TrainingKnowledge
+
+# 创建知识条目
+knowledge = TrainingKnowledge(
+    content="BERT训练经验...",
+    task_id="hist-001",
+    task_type="classification",
+    model_architecture="bert-base",
+    issues_encountered=["损失停滞"],
+    solutions_applied=["降低学习率"]
+)
+
+# 添加到检索器
+retriever = create_knowledge_retriever("vector")
+await retriever.add_knowledge(knowledge)
+```
 
 ### 集群API适配
 
